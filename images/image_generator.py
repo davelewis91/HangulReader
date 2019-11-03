@@ -12,7 +12,7 @@ import io
 import os
 import random
 
-import numpy
+import numpy as np
 import pandas as pd
 from PIL import Image, ImageFont, ImageDraw
 from scipy.ndimage.interpolation import map_coordinates
@@ -23,8 +23,8 @@ SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 
 # Default data paths.
 DEFAULT_LABEL_FILE = os.path.join(SCRIPT_PATH,
-                                  '../labels/labels_256.txt')
-DEFAULT_FONTS_DIR = os.path.join(SCRIPT_PATH, '../fonts')
+                                  '../labels/labels_256_comma_sep.txt')
+DEFAULT_FONTS_DIR = os.path.join(SCRIPT_PATH, '../fonts/all_fonts/')
 DEFAULT_OUTPUT_DIR = os.path.join(SCRIPT_PATH, '../images')
 
 # Number of random distortion images to generate per font and character.
@@ -34,6 +34,41 @@ DISTORTION_COUNT = 5
 IMAGE_WIDTH = 64
 IMAGE_HEIGHT = 64
 
+def increment_count(count):
+    if count % 5000 == 0:
+        print(f'{count} images generated...')
+    count += 1
+    return count
+
+def get_labels(label_file):
+    labels = pd.read_csv(label_file, encoding='utf-16')
+    nlabels = len(labels)
+    labels = zip(labels['index'], labels['char'])
+    return labels, nlabels
+
+def get_fonts(font_dir):
+    fonts = glob.glob(os.path.join(font_dir, '*.[ot]tf'))
+    nfonts = len(fonts)
+    return fonts, nfonts
+
+def draw_image(character, font):
+    image = Image.new('L', (IMAGE_WIDTH, IMAGE_HEIGHT), color=255)
+    font = ImageFont.truetype(font, 44)
+    drawing = ImageDraw.Draw(image)
+    w, h = drawing.textsize(character, font=font)
+    drawing.text(
+        ((IMAGE_WIDTH - w) / 2, (IMAGE_HEIGHT - h) / 2),
+        character,
+        fill=(0),
+        font=font
+    )
+    return image
+
+def save_image(image, count, image_dir=DEFAULT_OUTPUT_DIR):
+    file_string = f'hangul_{count}.jpeg'
+    file_path = os.path.join(image_dir, file_string)
+    image.save(file_path, 'JPEG')
+    return file_path
 
 def generate_hangul_images(label_file, fonts_dir, output_dir):
     """Generate Hangul image files.
@@ -43,61 +78,48 @@ def generate_hangul_images(label_file, fonts_dir, output_dir):
     The generated images will be stored in the given output directory. Image
     paths will have their corresponding labels listed in a CSV file.
     """
-    labels = pd.read_csv(label_file, delimiter='	')
-    labels = zip(labels['index'], labels['char'])
-    #with io.open(label_file, 'r', encoding='utf-8') as f:
-    #    labels = f.read().splitlines()
+    labels, nlabels = get_labels(label_file)
 
     image_dir = os.path.join(output_dir, 'hangul-images')
     if not os.path.exists(image_dir):
         os.makedirs(os.path.join(image_dir))
 
     # Get a list of the fonts.
-    fonts = glob.glob(os.path.join(fonts_dir, '*.[ot]tf'))
+    fonts, nfonts = get_fonts(fonts_dir)
 
-    labels_csv = io.open(os.path.join(output_dir, 'image-label-map.csv'), 'w',
-                         encoding='utf-8')
+    labels_csv = io.open(os.path.join(output_dir, 'image-label-map.csv'),
+                         'w', encoding='utf-16')
 
     total_count = 0
-    for i, character in labels:
-        # Print image count roughly every 5000 images.
-        if total_count % 5000 == 0:
-            print('{} images generated...'.format(total_count))
-
+    print(f'Total number of images: {nlabels*nfonts*(DISTORTION_COUNT+1)}')
+    for index, character in labels:
         for font in fonts:
-            total_count += 1
-            image = Image.new('L', (IMAGE_WIDTH, IMAGE_HEIGHT), color=255)
-            font = ImageFont.truetype(font, 48)
-            drawing = ImageDraw.Draw(image)
-            w, h = drawing.textsize(character, font=font)
-            drawing.text(
-                ((IMAGE_WIDTH-w)/2, (IMAGE_HEIGHT-h)/2),
-                character,
-                fill=(0),
-                font=font
-            )
-            file_string = 'hangul_{}.jpeg'.format(total_count)
-            file_path = os.path.join(image_dir, file_string)
-            image.save(file_path, 'JPEG')
-            labels_csv.write(u'{},{},{}\n'.format(file_path, i, character))
+            # Print image count roughly every 5000 images.
+            total_count = increment_count(total_count)
+
+            image = draw_image(character, font)
+
+            file_name = save_image(image, total_count, image_dir)
+            labels_csv.write(f'{file_name},{index},{character}\n')
 
             for i in range(DISTORTION_COUNT):
-                total_count += 1
-                file_string = 'hangul_{}.jpeg'.format(total_count)
-                file_path = os.path.join(image_dir, file_string)
-                arr = numpy.array(image)
+                total_count = increment_count(total_count)
 
+                # invert the raw array to avoid black borders on distort
+                arr = np.invert(np.array(image))
                 distorted_array = elastic_distort(
                     arr, alpha=random.randint(30, 36),
                     sigma=random.randint(5, 6)
                 )
+                # then invert it back to black text/white background
+                distorted_array = np.invert(distorted_array)
                 distorted_image = Image.fromarray(distorted_array)
-                distorted_image.save(file_path, 'JPEG')
-                labels_csv.write(u'{},{},{}\n'.format(file_path, i, character))
+                file_path = save_image(distorted_image, total_count, image_dir)
+                labels_csv.write(f'{file_path},{index},{character}\n')
 
-    print('Finished generating {} images.'.format(total_count))
+    print(f'Finished generating {total_count} images.')
     labels_csv.close()
-
+    return
 
 def elastic_distort(image, alpha, sigma):
     """Perform elastic distortion on an image.
@@ -105,7 +127,7 @@ def elastic_distort(image, alpha, sigma):
     deformation. The sigma variable refers to the Gaussian filter standard
     deviation.
     """
-    random_state = numpy.random.RandomState(None)
+    random_state = np.random.RandomState(None)
     shape = image.shape
 
     dx = gaussian_filter(
@@ -117,8 +139,8 @@ def elastic_distort(image, alpha, sigma):
         sigma, mode="constant"
     ) * alpha
 
-    x, y = numpy.meshgrid(numpy.arange(shape[0]), numpy.arange(shape[1]))
-    indices = numpy.reshape(y+dy, (-1, 1)), numpy.reshape(x+dx, (-1, 1))
+    x, y = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]))
+    indices = np.reshape(y+dy, (-1, 1)), np.reshape(x+dx, (-1, 1))
     return map_coordinates(image, indices, order=1).reshape(shape)
 
 
