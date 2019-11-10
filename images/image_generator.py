@@ -43,7 +43,13 @@ def increment_count(count):
 def get_labels(label_file):
     labels = pd.read_csv(label_file, encoding='utf-16')
     nlabels = len(labels)
-    labels = zip(labels['index'], labels['char'])
+    labels['label_seq'] = labels['first_kr'] + '|' + labels['second_kr']
+    labels['label_seq'] = np.where(
+        pd.isnull(labels['third_kr']),
+        labels['label_seq'],
+        labels['label_seq'] + '|' + labels['third_kr']
+    )
+    labels = zip(labels['index'], labels['char'], labels['label_seq'])
     return labels, nlabels
 
 def get_fonts(font_dir):
@@ -89,18 +95,19 @@ def generate_hangul_images(label_file, fonts_dir, output_dir):
 
     labels_csv = io.open(os.path.join(output_dir, 'image-label-map.csv'),
                          'w', encoding='utf-16')
+    labels_csv.write('file_name,label_index,labels\n')
 
     total_count = 0
     print(f'Total number of images: {nlabels*nfonts*(DISTORTION_COUNT+1)}')
-    for index, character in labels:
+    for index, character, seq in labels:
         for font in fonts:
             # Print image count roughly every 5000 images.
             total_count = increment_count(total_count)
 
             image = draw_image(character, font)
 
-            file_name = save_image(image, total_count, image_dir)
-            labels_csv.write(f'{file_name},{index},{character}\n')
+            file_path = save_image(image, total_count, image_dir)
+            labels_csv.write(f'{file_path},{index},{seq}\n')
 
             for i in range(DISTORTION_COUNT):
                 total_count = increment_count(total_count)
@@ -115,7 +122,7 @@ def generate_hangul_images(label_file, fonts_dir, output_dir):
                 distorted_array = np.invert(distorted_array)
                 distorted_image = Image.fromarray(distorted_array)
                 file_path = save_image(distorted_image, total_count, image_dir)
-                labels_csv.write(f'{file_path},{index},{character}\n')
+                labels_csv.write(f'{file_path},{index},{seq}\n')
 
     print(f'Finished generating {total_count} images.')
     labels_csv.close()
